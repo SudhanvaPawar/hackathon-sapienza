@@ -14,7 +14,7 @@ from utils import functions as uf
 from utils.model import DynamicMLP
 
 folder_path = './data/'
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') #without cuda it was 21.6 now its 14.2
 
 
 csv_files = glob.glob(os.path.join(folder_path, '*c000.csv'))
@@ -117,7 +117,7 @@ model.eval()
 print(f"\nFine-tuning finished in {execution_time:.1f}s")
 
 
-group_name = "G20"
+group_name = "G20_V1_submission_test"
 out_dir = Path(group_name)
 out_dir.mkdir(exist_ok=True)
 
