@@ -1,6 +1,10 @@
 import torch
+import torch.nn as nn
 import glob
 import os
+import time
+import pickle
+import inspect
 import pandas as pd
 import numpy as np
 from sklearn.impute import SimpleImputer
@@ -15,25 +19,37 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 csv_files = glob.glob(os.path.join(folder_path, '*c000.csv'))
 df_all = pd.concat((pd.read_csv(file, sep=";") for file in csv_files), ignore_index=True)
-    
+
+forget_df = pd.read_csv(os.path.join(folder_path, 'forget_data.csv'), sep=",")
+
 random_seed = 42
-train_df = df_all
 id_col = "user_id"
 
+forget_ids = set(forget_df[id_col])
+clean_df = df_all[~df_all[id_col].isin(forget_ids)].reset_index(drop=True)
 
-# here must be the code to divide train / val / test / forget sets
+ids = clean_df[id_col].unique()
+rng = np.random.default_rng(random_seed)
+rng.shuffle(ids)
+val_frac = 0.15
+n_val = int(len(ids) * val_frac)
+val_ids = set(ids[:n_val])
+
+val_df = clean_df[clean_df[id_col].isin(val_ids)].reset_index(drop=True)
+train_df = clean_df[~clean_df[id_col].isin(val_ids)].reset_index(drop=True)
 
 
-X_train, y_train, feature_cols, target_cols = uf.prepare_data(train_df, id_col=id_col, target_prefix='target__') # careful! here the train is not the real train set
+X_train, y_train, feature_cols, target_cols = uf.prepare_data(train_df, id_col=id_col, target_prefix='target__')
+X_val, y_val, _, _ = uf.prepare_data(val_df, id_col=id_col, target_prefix='target__')
 
 imputer = SimpleImputer(strategy='median')
 X_train = imputer.fit_transform(X_train).astype(np.float32)
-
+X_val = imputer.transform(X_val).astype(np.float32)
 
 
 pos_counts = np.sum(y_train, axis=0)
 neg_counts = len(y_train) - pos_counts
-pos_weights = torch.tensor(neg_counts / (pos_counts + 1e-6), device=device)
+pos_weights = torch.tensor(neg_counts / (pos_counts + 1e-6), device=device, dtype=torch.float32)
 pos_weights = pos_weights.clamp(min=0.1, max=100.0)
 print(f"pos_weights: {pos_weights}")
 
@@ -62,7 +78,61 @@ except NameError:
     raise
 
 model.load_state_dict(state_dict)
-
-model.eval()
+model.to(device)
 
 print("\nModel successfully reconstructed and weights loaded.")
+
+
+X_train_t = torch.tensor(X_train, device=device)
+y_train_t = torch.tensor(y_train.astype(np.float32), device=device)
+
+finetune_epochs = 5
+finetune_lr = 1e-4
+batch_size = 256
+
+model.train()
+optimizer = torch.optim.Adam(model.parameters(), lr=finetune_lr)
+loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights)
+
+n = X_train_t.shape[0]
+start_time = time.time()
+for epoch in range(finetune_epochs):
+    perm = torch.randperm(n, device=device)
+    epoch_loss = 0.0
+    for i in range(0, n, batch_size):
+        idx = perm[i:i + batch_size]
+        if len(idx) < 2:
+            continue
+        xb, yb = X_train_t[idx], y_train_t[idx]
+        optimizer.zero_grad()
+        logits = model(xb)
+        loss = loss_fn(logits, yb)
+        loss.backward()
+        optimizer.step()
+        epoch_loss += loss.item() * len(idx)
+    print(f"epoch {epoch + 1}/{finetune_epochs} - loss: {epoch_loss / n:.4f}")
+execution_time = time.time() - start_time
+model.eval()
+
+print(f"\nFine-tuning finished in {execution_time:.1f}s")
+
+
+group_name = "G20"
+out_dir = Path(group_name)
+out_dir.mkdir(exist_ok=True)
+
+(out_dir / "execution_time.txt").write_text(str(int(round(execution_time))))
+
+model_class_src = inspect.getsource(DynamicMLP)
+artifact = {
+    "state_dict": model.state_dict(),
+    "architecture": architecture,
+    "best_hyperparameters": best_params,
+    "model_class_source": model_class_src,
+}
+with open(out_dir / "model_artifact", "wb") as f:
+    pickle.dump(artifact, f)
+
+pd.DataFrame({"user_id": val_df[id_col].unique()}).to_csv(out_dir / "validation_ids.csv", index=False)
+
+print(f"\nSubmission written to ./{out_dir}/")
