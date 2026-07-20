@@ -1,0 +1,13 @@
+name: hackathon-tim-env
+channels:
+  - defaults
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.8
+  - pip
+  - pandas=2.0.3
+  - numpy=1.24.4
+  - pip:
+    - scikit-learn==1.3.2
+    - torch==2.4.1
