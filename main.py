@@ -43,10 +43,12 @@ train_df = clean_df[~clean_df[id_col].isin(val_ids)].reset_index(drop=True)
 
 X_train, y_train, feature_cols, target_cols = uf.prepare_data(train_df, id_col=id_col, target_prefix='target__')
 X_val, y_val, _, _ = uf.prepare_data(val_df, id_col=id_col, target_prefix='target__')
+X_forget, y_forget, _, _ = uf.prepare_data(forget_df, id_col=id_col, target_prefix='target__')
 
 imputer = SimpleImputer(strategy='median')
 X_train = imputer.fit_transform(X_train).astype(np.float32)
 X_val = imputer.transform(X_val).astype(np.float32)
+X_forget = imputer.transform(X_forget).astype(np.float32)
 
 
 pos_counts = np.sum(y_train, axis=0)
@@ -84,40 +86,69 @@ model.to(device)
 
 print("\nModel successfully reconstructed and weights loaded.")
 
-#main logic of unlearning
+#main logic of unlearning (certified removal via influence functions, Guo et al. 2020)
 
 X_train_t = torch.tensor(X_train, device=device)
 y_train_t = torch.tensor(y_train.astype(np.float32), device=device)
+X_forget_t = torch.tensor(X_forget, device=device)
+y_forget_t = torch.tensor(y_forget.astype(np.float32), device=device)
 
-finetune_epochs = 3
-finetune_lr = 1e-4
-batch_size = 256
+params = [p for p in model.parameters() if p.requires_grad]
+param_shapes = [p.shape for p in params]
+param_numel = [p.numel() for p in params]
 
-model.train()
-optimizer = torch.optim.Adam(model.parameters(), lr=finetune_lr)
+def flatten(grads):
+    return torch.cat([g.reshape(-1) for g in grads])
+
+def unflatten(vector):
+    chunks = []
+    idx = 0
+    for shape, numel in zip(param_shapes, param_numel):
+        chunks.append(vector[idx:idx + numel].view(shape))
+        idx += numel
+    return chunks
+
+def hvp(loss, vector):
+    grads = torch.autograd.grad(loss, params, create_graph=True)
+    grad_dot_vector = torch.sum(flatten(grads) * vector)
+    hv = torch.autograd.grad(grad_dot_vector, params, retain_graph=False)
+    return flatten(hv)
+
 loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights)
 
+lissa_iterations = 50
+lissa_batch_size = 256
+damping = 0.01
+scale = 25.0
+
+model.eval()
 n = X_train_t.shape[0]
 start_time = time.time()            #Timer start point of unlearning process not script
-for epoch in range(finetune_epochs):
-    perm = torch.randperm(n, device=device)
-    epoch_loss = 0.0
-    for i in range(0, n, batch_size):
-        idx = perm[i:i + batch_size]
-        if len(idx) < 2:
-            continue
-        xb, yb = X_train_t[idx], y_train_t[idx]
-        optimizer.zero_grad()
-        logits = model(xb)
-        loss = loss_fn(logits, yb)
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item() * len(idx)
-    print(f"epoch {epoch + 1}/{finetune_epochs} - loss: {epoch_loss / n:.4f}")
-execution_time = time.time() - start_time  #Timer endpoint and total time for unlearning
-model.eval()
 
-print(f"\nFine-tuning finished in {execution_time:.1f}s")
+forget_logits = model(X_forget_t)
+forget_loss = loss_fn(forget_logits, y_forget_t)
+forget_grad = torch.autograd.grad(forget_loss, params)
+v = flatten(forget_grad).detach()
+
+hinv_v = v.clone()
+for i in range(lissa_iterations):
+    idx = torch.randint(0, n, (lissa_batch_size,), device=device)
+    xb, yb = X_train_t[idx], y_train_t[idx]
+    logits = model(xb)
+    loss = loss_fn(logits, yb)
+    hv = hvp(loss, hinv_v)
+    hinv_v = v + hinv_v - (hv + damping * hinv_v) / scale
+    if (i + 1) % 10 == 0:
+        print(f"lissa iteration {i + 1}/{lissa_iterations}")
+hinv_v = (hinv_v / scale).detach()
+
+with torch.no_grad():
+    for p, u in zip(params, unflatten(hinv_v)):
+        p -= u
+
+execution_time = time.time() - start_time  #Timer endpoint and total time for unlearning
+
+print(f"\nInfluence-based unlearning finished in {execution_time:.1f}s")
 
 #P@10 metric calculation
 X_val_t = torch.tensor(X_val, device=device)
