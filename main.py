@@ -134,7 +134,7 @@ with torch.no_grad():
 print(f"\nprecision_val (P@{k}): {precision_val:.4f}")
 
 #change this for making new folder with 3 files - exec time, model, validation set
-group_name = "G20_V1_submission_test"
+group_name = "G20_V2_CUDA"
 out_dir = Path(group_name)
 out_dir.mkdir(exist_ok=True)
 
