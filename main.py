@@ -120,7 +120,18 @@ model.eval()
 print(f"\nFine-tuning finished in {execution_time:.1f}s")
 
 #P@10 metric calculation
+X_val_t = torch.tensor(X_val, device=device)
+y_val_t = torch.tensor(y_val.astype(np.float32), device=device)
 
+k = 10
+with torch.no_grad():
+    val_logits = model(X_val_t)
+    val_probs = torch.sigmoid(val_logits)
+    topk_idx = torch.topk(val_probs, k=k, dim=1).indices
+    hits = torch.gather(y_val_t, 1, topk_idx)
+    precision_val = hits.sum(dim=1).div(k).mean().item()
+
+print(f"\nprecision_val (P@{k}): {precision_val:.4f}")
 
 #change this for making new folder with 3 files - exec time, model, validation set
 group_name = "G20_V1_submission_test"
