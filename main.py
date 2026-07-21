@@ -118,8 +118,8 @@ loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights)
 
 lissa_iterations = 50
 lissa_batch_size = 256
-damping = 0.01
-scale = 25.0
+damping = 0.1
+scale = 100.0
 
 model.eval()
 n = X_train_t.shape[0]
@@ -129,6 +129,7 @@ forget_logits = model(X_forget_t)
 forget_loss = loss_fn(forget_logits, y_forget_t)
 forget_grad = torch.autograd.grad(forget_loss, params)
 v = flatten(forget_grad).detach()
+v_norm = v.norm()
 
 hinv_v = v.clone()
 for i in range(lissa_iterations):
@@ -138,8 +139,15 @@ for i in range(lissa_iterations):
     loss = loss_fn(logits, yb)
     hv = hvp(loss, hinv_v)
     hinv_v = v + hinv_v - (hv + damping * hinv_v) / scale
+    hinv_v_norm = hinv_v.norm()
+    if not torch.isfinite(hinv_v_norm):
+        print(f"lissa iteration {i + 1}/{lissa_iterations} diverged, stopping early")
+        hinv_v = v.clone()
+        break
+    if hinv_v_norm > 10 * v_norm:
+        hinv_v = hinv_v * (10 * v_norm / hinv_v_norm)
     if (i + 1) % 10 == 0:
-        print(f"lissa iteration {i + 1}/{lissa_iterations}")
+        print(f"lissa iteration {i + 1}/{lissa_iterations} - hinv_v norm: {hinv_v_norm:.4f}")
 hinv_v = (hinv_v / scale).detach()
 
 with torch.no_grad():
@@ -209,7 +217,7 @@ print(f"MIA Resistance Score (45%): {mia_resistance:.4f}")
 print(f"Combined Quality Score:     {estimated_score:.4f}")
 
 #new folder with 3 files - exec time, model, validation set
-group_name = "G20_V5_submission_test"
+group_name = "G20_V7"
 out_dir = Path(group_name)
 out_dir.mkdir(exist_ok=True)
 
