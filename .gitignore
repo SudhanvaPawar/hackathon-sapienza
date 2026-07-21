@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files (Python)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment folders
+hackathon-tim-env/
+.venv/
+env/
+venv/
+
+# Datasets & heavy artifacts (Do NOT push large CSVs to Git)
+data/*.csv
+data/model_artifact
+*.zip
+G20*/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE & Editor settings
+.vscode/
+.idea/
