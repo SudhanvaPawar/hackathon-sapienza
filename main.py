@@ -89,7 +89,7 @@ print("\nModel successfully reconstructed and weights loaded.")
 X_train_t = torch.tensor(X_train, device=device)
 y_train_t = torch.tensor(y_train.astype(np.float32), device=device)
 
-finetune_epochs = 5
+finetune_epochs = 3
 finetune_lr = 1e-4
 batch_size = 256
 
@@ -133,8 +133,52 @@ with torch.no_grad():
 
 print(f"\nprecision_val (P@{k}): {precision_val:.4f}")
 
-#change this for making new folder with 3 files - exec time, model, validation set
-group_name = "G20_V2_CUDA"
+
+# MIA resistance metric calculation
+from sklearn.metrics import roc_auc_score
+
+print("\nEvaluating MIA Resistance ")
+
+# Prepare Forget Data
+X_forget, y_forget, _, _ = uf.prepare_data(forget_df, id_col=id_col, target_prefix='target__')
+X_forget = imputer.transform(X_forget).astype(np.float32)
+
+X_forget_t = torch.tensor(X_forget, device=device)
+y_forget_t = torch.tensor(y_forget.astype(np.float32), device=device)
+
+# Get Model Losses on Forget (Members) vs Validation (Non-Members)
+with torch.no_grad():
+    logits_forget = model(X_forget_t)
+    logits_val = model(X_val_t)
+
+    # Compute element-wise Binary Cross-Entropy Loss per sample
+    bce = nn.BCEWithLogitsLoss(pos_weight=pos_weights, reduction='none')
+    loss_forget = bce(logits_forget, y_forget_t).mean(dim=1).cpu().numpy()
+    loss_val = bce(logits_val, y_val_t).mean(dim=1).cpu().numpy()
+
+# Label: 1 for Forget Set (Targeted Members), 0 for Unseen Val Set
+# Lower loss indicates higher confidence (member likelihood)
+y_true = np.concatenate([np.ones(len(loss_forget)), np.zeros(len(loss_val))])
+scores = np.concatenate([-loss_forget, -loss_val])  # Negative loss: lower loss = higher score
+
+# Calculate MIA AUC
+mia_auc = roc_auc_score(y_true, scores)
+
+# Calculate Official Competition MIA Resistance Metric
+mia_resistance = 1.0 - 2.0 * abs(mia_auc - 0.5)
+
+print(f"MIA AUC Score:          {mia_auc:.4f} (Ideal = 0.5000)")
+print(f"MIA Resistance Score:   {mia_resistance:.4f} (Ideal = 1.0000)")
+
+# estimated total score
+estimated_score = 0.45 * precision_val + 0.45 * mia_resistance
+print(f"\n--- SCORE SUMMARY ---")
+print(f"Precision@10 Score (45%):   {precision_val:.4f}")
+print(f"MIA Resistance Score (45%): {mia_resistance:.4f}")
+print(f"Combined Quality Score:     {estimated_score:.4f}")
+
+#new folder with 3 files - exec time, model, validation set
+group_name = "G20_V5_submission_test"
 out_dir = Path(group_name)
 out_dir.mkdir(exist_ok=True)
 
