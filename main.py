@@ -25,6 +25,8 @@ forget_df = pd.read_csv(os.path.join(folder_path, 'forget_data.csv'), sep=",")
 random_seed = 42
 id_col = "user_id"
 
+#train/validation split for fine tuning
+
 forget_ids = set(forget_df[id_col])
 clean_df = df_all[~df_all[id_col].isin(forget_ids)].reset_index(drop=True)
 
@@ -82,6 +84,7 @@ model.to(device)
 
 print("\nModel successfully reconstructed and weights loaded.")
 
+#main logic of unlearning
 
 X_train_t = torch.tensor(X_train, device=device)
 y_train_t = torch.tensor(y_train.astype(np.float32), device=device)
@@ -95,7 +98,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=finetune_lr)
 loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weights)
 
 n = X_train_t.shape[0]
-start_time = time.time()
+start_time = time.time()            #Timer start point of unlearning process not script
 for epoch in range(finetune_epochs):
     perm = torch.randperm(n, device=device)
     epoch_loss = 0.0
@@ -111,12 +114,15 @@ for epoch in range(finetune_epochs):
         optimizer.step()
         epoch_loss += loss.item() * len(idx)
     print(f"epoch {epoch + 1}/{finetune_epochs} - loss: {epoch_loss / n:.4f}")
-execution_time = time.time() - start_time
+execution_time = time.time() - start_time  #Timer endpoint and total time for unlearning
 model.eval()
 
 print(f"\nFine-tuning finished in {execution_time:.1f}s")
 
+#P@10 metric calculation
 
+
+#change this for making new folder with 3 files - exec time, model, validation set
 group_name = "G20_V1_submission_test"
 out_dir = Path(group_name)
 out_dir.mkdir(exist_ok=True)
